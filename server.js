@@ -2,16 +2,17 @@ import express from "express";
 import { renderFakeMotion } from "./renderer.js";
 
 const app = express();
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json());
 
 app.post("/render", async (req, res) => {
   try {
-    const { image_url, duration = 16 } = req.body;
-    if (!image_url) {
-      return res.status(400).json({ error: "image_url missing" });
+    const { imageUrl } = req.body;
+    if (!imageUrl) {
+      return res.status(400).json({ error: "imageUrl missing" });
     }
 
-    const videoPath = await renderFakeMotion(image_url, duration);
+    const videoPath = await renderFakeMotion(imageUrl);
+
     res.sendFile(videoPath);
   } catch (err) {
     console.error(err);
@@ -20,6 +21,6 @@ app.post("/render", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 8080;
-app.listen(PORT, () =>
-  console.log("Shorts Fake Motion Engine running on", PORT)
-);
+app.listen(PORT, () => {
+  console.log(`Fake Motion Engine listening on ${PORT}`);
+});
