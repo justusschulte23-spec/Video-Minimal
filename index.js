@@ -18,13 +18,19 @@ app.post("/render", async (req, res) => {
     const img = await fetch(imageUrl);
     fs.writeFileSync(imgPath, Buffer.from(await img.arrayBuffer()));
 
-    const cmd = `
-      ffmpeg -y -loop 1 -i ${imgPath} \
-      -vf "scale=1080:1920,
-           zoompan=z='1.03-0.015*(on/480)':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)+on*0.3':d=480:s=1080x1920,
-           fps=30" \
-      -t 16 -pix_fmt yuv420p ${outPath}
-    `;
+   const cmd = `
+ffmpeg -y -loop 1 -i ${imgPath} \
+-vf "
+scale=1080:1920,
+zoompan=
+z='1.02+0.015*sin(2*PI*on/240)':
+x='iw/2-(iw/zoom/2)+8*sin(2*PI*on/360)':
+y='ih/2-(ih/zoom/2)+6*cos(2*PI*on/300)':
+d=480:s=1080x1920,
+fps=30
+" \
+-t 16 -pix_fmt yuv420p ${outPath}
+`;
 
     exec(cmd, (err) => {
       if (err) return res.status(500).json({ error: err.message });
