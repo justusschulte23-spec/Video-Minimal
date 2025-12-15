@@ -1,6 +1,10 @@
-# Video-Minimal
+# Shorts Fake Motion Engine
 
-Minimal fake-motion image-to-video service (Shorts ready).
+Turns a single 9:16 image into a 16s TikTok-ready video
+using perceptual fake motion (breathing + drift).
 
-POST /render  
-Body: { "image_url": "https://..." }
+POST /render
+{
+  "image_url": "https://...",
+  "duration": 16
+}
