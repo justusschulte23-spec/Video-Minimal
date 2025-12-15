@@ -1,2 +1,6 @@
 # Video-Minimal
-Minimal-Image-to-Vidio-Mimiic
+
+Minimal fake-motion image-to-video service (Shorts ready).
+
+POST /render  
+Body: { "image_url": "https://..." }
