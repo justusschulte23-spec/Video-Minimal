@@ -10,35 +10,35 @@ app.use(express.json());
 app.post("/render", async (req, res) => {
   try {
     const { imageUrl } = req.body;
-    if (!imageUrl) {
-      return res.status(400).json({ error: "imageUrl missing" });
-    }
+    if (!imageUrl) return res.status(400).json({ error: "imageUrl missing" });
 
     const id = crypto.randomUUID();
     const imgPath = `/tmp/${id}.jpg`;
     const outPath = `/tmp/${id}.mp4`;
 
     const img = await fetch(imageUrl);
-    if (!img.ok) {
-      return res.status(400).json({ error: "failed to fetch image" });
-    }
+    if (!img.ok) return res.status(400).json({ error: "failed to fetch image" });
     fs.writeFileSync(imgPath, Buffer.from(await img.arrayBuffer()));
 
     /**
-     * FINAL SERVER-SAFE FAKE MOTION
-     * - NO zoompan
-     * - NO trig in crop
-     * - deterministic, Railway-proof
-     * - smooth, watchable 16s
+     * FAKE MOTION – MAXIMAL LEBENDIG, NO DRIFT, NO RUCKELN
+     * - slow push (camera presence)
+     * - vertical breathing illusion
+     * - subtle parallax drift
+     * - server-safe, deterministic
      */
 
     const cmd = `
 ffmpeg -y -hide_banner -loglevel error -loop 1 -i "${imgPath}" \
--vf "scale=1200:2133,
-crop=1080:1920:(1200-1080)/2+0.8*t:(2133-1920)/2+0.6*t,
+-vf "
+scale=iw*(1+0.035*t/16):ih*(1+0.020*t/16),
+crop=1080:1920:
+  (iw-1080)/2 + 1.2*sin(0.6*t):
+  (ih-1920)/2 + 0.8*sin(0.4*t),
 fps=30,
-eq=brightness=0.004*t:contrast=1.015:saturation=1.02,
-noise=alls=2:allf=t" \
+eq=brightness=0.006*sin(0.5*t):contrast=1.02:saturation=1.03,
+noise=alls=3:allf=t
+" \
 -t 16 -shortest -pix_fmt yuv420p -movflags +faststart "${outPath}"
 `;
 
@@ -61,5 +61,5 @@ noise=alls=2:allf=t" \
 });
 
 app.listen(process.env.PORT || 8080, () => {
-  console.log("Video-Minimal running (stable)");
+  console.log("Video-Minimal running (alive mode)");
 });
