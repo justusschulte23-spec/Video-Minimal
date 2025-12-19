@@ -21,25 +21,27 @@ app.post("/render", async (req, res) => {
     fs.writeFileSync(imgPath, Buffer.from(await img.arrayBuffer()));
 
     /**
-     * FAKE MOTION – MAXIMAL LEBENDIG, NO DRIFT, NO RUCKELN
-     * - slow push (camera presence)
-     * - vertical breathing illusion
-     * - subtle parallax drift
-     * - server-safe, deterministic
+     * FAKE MOTION – FINAL STABLE BUILD
+     * - visible motion
+     * - no jitter
+     * - no crashes
+     * - TikTok-safe
      */
 
     const cmd = `
 ffmpeg -y -hide_banner -loglevel error -loop 1 -i "${imgPath}" \
 -vf "
-scale=iw*(1+0.035*t/16):ih*(1+0.020*t/16),
-crop=1080:1920:
-  (iw-1080)/2 + 1.2*sin(0.6*t):
-  (ih-1920)/2 + 0.8*sin(0.4*t),
+scale=1080:1920,
+zoompan=
+z='1.00+0.04*(on/480) + 0.008*sin(2*PI*on/240)':
+x='iw/2-(iw/zoom/2)+6*sin(2*PI*on/360)':
+y='ih/2-(ih/zoom/2)+5*sin(2*PI*on/300)':
+d=480:s=1080x1920,
 fps=30,
-eq=brightness=0.006*sin(0.5*t):contrast=1.02:saturation=1.03,
+eq=brightness=0.005*sin(2*PI*on/240):contrast=1.02:saturation=1.03,
 noise=alls=3:allf=t
 " \
--t 16 -shortest -pix_fmt yuv420p -movflags +faststart "${outPath}"
+-t 16 -pix_fmt yuv420p -movflags +faststart "${outPath}"
 `;
 
     exec(cmd, { timeout: 20000 }, (err) => {
@@ -61,5 +63,5 @@ noise=alls=3:allf=t
 });
 
 app.listen(process.env.PORT || 8080, () => {
-  console.log("Video-Minimal running (alive mode)");
+  console.log("Video-Minimal running (final stable)");
 });
