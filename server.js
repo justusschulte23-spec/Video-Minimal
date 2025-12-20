@@ -1,82 +1,76 @@
 import express from "express";
 import { exec } from "child_process";
 import fs from "fs";
-import fetch from "node-fetch";
 import crypto from "crypto";
+import path from "path";
 
 const app = express();
 app.use(express.json());
 
-/**
- * POST /loop
- * {
- *   videoUrl: "https://cdn....mp4",
- *   loops: 3,
- *   music: true
- * }
- */
+const MUSIC_DIR = "./music";
+const VIDEO_DURATION = 15; // Sekunden
+const AUDIO_DURATION = 17; // leicht länger für Fade
+
+function pickRandom(arr) {
+  return arr[Math.floor(Math.random() * arr.length)];
+}
+
 app.post("/loop", async (req, res) => {
   try {
-    const { videoUrl, loops = 3, music = true } = req.body;
-
-    if (!videoUrl || typeof videoUrl !== "string") {
-      return res.status(400).json({ error: "videoUrl missing or invalid" });
-    }
+    const { videoUrl } = req.body;
+    if (!videoUrl) return res.status(400).json({ error: "videoUrl missing" });
 
     const id = crypto.randomUUID();
-    const inputPath = `/tmp/${id}_input.mp4`;
-    const outputPath = `/tmp/${id}_output.mp4`;
+    const videoPath = `/tmp/${id}_in.mp4`;
+    const outPath = `/tmp/${id}_out.mp4`;
 
-    // download video
-    const videoRes = await fetch(videoUrl);
-    if (!videoRes.ok) throw new Error("Failed to download video");
-    fs.writeFileSync(inputPath, Buffer.from(await videoRes.arrayBuffer()));
+    // Video laden
+    const curlCmd = `curl -L "${videoUrl}" -o "${videoPath}"`;
+    exec(curlCmd, (err) => {
+      if (err) return res.status(500).json({ error: "video download failed" });
 
-    const safeLoops = Math.max(1, Math.min(Number(loops), 5));
+      // Musik zufällig wählen
+      const tracks = fs.readdirSync(MUSIC_DIR).filter(f => f.endsWith(".mp3"));
+      if (!tracks.length) return res.status(500).json({ error: "no music found" });
 
-    let musicInput = "";
-    let audioMap = "";
+      const musicFile = pickRandom(tracks);
+      const musicPath = path.join(MUSIC_DIR, musicFile);
 
-    if (music) {
-      const track = pickMusic();
-      musicInput = `-stream_loop -1 -i "/app/music/${track}"`;
-      audioMap = `-map 0:v:0 -map 1:a:0 -shortest -c:a aac -b:a 128k`;
-    }
+      // zufälliger Audio-Start (0–8s)
+      const audioOffset = Math.floor(Math.random() * 8);
 
-    const cmd = `
+      const ffmpegCmd = `
 ffmpeg -y -hide_banner -loglevel error \
--stream_loop ${safeLoops - 1} -i "${inputPath}" \
-${musicInput} \
--c:v copy \
-${audioMap} \
--movflags +faststart \
-"${outputPath}"
+-i "${videoPath}" \
+-ss ${audioOffset} -i "${musicPath}" \
+-filter_complex "
+[0:v]tpad=stop_mode=clone:stop_duration=5[v];
+[1:a]afade=t=in:st=0:d=0.5,afade=t=out:st=${AUDIO_DURATION - 0.5}:d=0.5[a]
+" \
+-map "[v]" -map "[a]" \
+-t ${VIDEO_DURATION} \
+-pix_fmt yuv420p -movflags +faststart "${outPath}"
 `;
 
-    exec(cmd, { timeout: 30000 }, (err) => {
-      if (err) {
-        console.error("FFmpeg error:", err);
-        return res.status(500).json({ error: err.message });
-      }
+      exec(ffmpegCmd, { timeout: 30000 }, (err2) => {
+        if (err2) {
+          console.error(err2);
+          return res.status(500).json({ error: "ffmpeg failed" });
+        }
 
-      res.sendFile(outputPath, () => {
-        try { fs.unlinkSync(inputPath); } catch {}
-        try { fs.unlinkSync(outputPath); } catch {}
+        res.sendFile(outPath, () => {
+          try { fs.unlinkSync(videoPath); } catch {}
+          try { fs.unlinkSync(outPath); } catch {}
+        });
       });
     });
 
   } catch (e) {
-    console.error("LOOP ERROR:", e);
+    console.error(e);
     res.status(500).json({ error: e.message });
   }
 });
 
-function pickMusic() {
-  const files = fs.readdirSync("/app/music").filter(f => f.endsWith(".mp3"));
-  if (!files.length) throw new Error("No music files found");
-  return files[Math.floor(Math.random() * files.length)];
-}
-
 app.listen(process.env.PORT || 8080, () => {
-  console.log("Video-Minimal running (Looper + Music)");
+  console.log("🎬 Video Looper + Music Engine running");
 });
