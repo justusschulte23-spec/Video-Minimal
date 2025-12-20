@@ -1,10 +1,25 @@
-# Shorts Fake Motion Engine
+# Video Minimal – Shorts Video Looper
 
-Turns a single 9:16 image into a 16s TikTok-ready video
-using perceptual fake motion (breathing + drift).
+Creates TikTok / Shorts ready videos by looping short clips
+and optionally adding copyright-free background music.
 
-POST /render
+## Features
+- Loop short MP4 videos to 15–20 seconds
+- Optional baked-in background music
+- Fully FFmpeg safe
+- API-ready for n8n, Make, Zapier
+- Designed for Shorts / Reels / TikTok
+
+---
+
+## API
+
+### POST /loop
+
+**Request**
+```json
 {
-  "image_url": "https://...",
-  "duration": 16
+  "videoUrl": "https://cdn.example.com/input.mp4",
+  "loops": 3,
+  "music": true
 }
