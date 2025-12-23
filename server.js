@@ -7,87 +7,102 @@ import path from "path";
 const app = express();
 app.use(express.json());
 
-// 🔥 PUBLIC VIDEO HOSTING
-const PUBLIC_DIR = "./public/videos";
-fs.mkdirSync(PUBLIC_DIR, { recursive: true });
-app.use("/videos", express.static(PUBLIC_DIR));
-
 const MUSIC_DIR = "./music";
 const VIDEO_DURATION = 15;
 const FADE_IN = 0.3;
 const FADE_OUT = 0.3;
 const MUSIC_VOLUME = 0.25;
 
+const PUBLIC_BASE_URL = process.env.PUBLIC_BASE_URL 
+  || "https://video-minimal-production.up.railway.app";
+
+const OUTPUT_DIR = "/tmp/videos";
+if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+
 function pickRandom(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+/**
+ * CREATE LOOPED VIDEO
+ */
 app.post("/loop", async (req, res) => {
   try {
-    const { videoUrl, returnBinary = false } = req.body;
-    if (!videoUrl) return res.status(400).json({ error: "videoUrl missing" });
+    const { videoUrl } = req.body;
+    if (!videoUrl) {
+      return res.status(400).json({ error: "videoUrl missing" });
+    }
 
     const id = crypto.randomUUID();
-    const videoPath = `/tmp/${id}_in.mp4`;
-    const outPath = `/tmp/${id}_out.mp4`;
-    const publicPath = path.join(PUBLIC_DIR, `${id}.mp4`);
+    const inputPath = `/tmp/${id}_in.mp4`;
+    const outputFile = `${id}.mp4`;
+    const outputPath = path.join(OUTPUT_DIR, outputFile);
 
-    // Download input video
-    exec(`curl -L "${videoUrl}" -o "${videoPath}"`, { timeout: 30000 }, (err) => {
-      if (err) return res.status(500).json({ error: "video download failed" });
+    // Download source video
+    exec(`curl -L "${videoUrl}" -o "${inputPath}"`, { timeout: 30000 }, (err) => {
+      if (err) {
+        console.error("Download error:", err);
+        return res.status(500).json({ error: "video download failed" });
+      }
 
       const tracks = fs.readdirSync(MUSIC_DIR).filter(f => f.endsWith(".mp3"));
-      if (!tracks.length) return res.status(500).json({ error: "no music found" });
+      if (!tracks.length) {
+        return res.status(500).json({ error: "no music found" });
+      }
 
       const musicPath = path.join(MUSIC_DIR, pickRandom(tracks));
       const audioOffset = Math.floor(Math.random() * 8);
-      const fadeOutStart = VIDEO_DURATION - FADE_OUT;
+      const fadeOutStart = Math.max(0, VIDEO_DURATION - FADE_OUT);
 
       const ffmpegCmd = `
-ffmpeg -y -loglevel error \
--stream_loop -1 -i "${videoPath}" \
+ffmpeg -y -hide_banner -loglevel error \
+-stream_loop -1 -i "${inputPath}" \
 -ss ${audioOffset} -i "${musicPath}" \
 -filter_complex "
 [0:v]trim=duration=${VIDEO_DURATION},setpts=PTS-STARTPTS[v];
 [1:a]volume=${MUSIC_VOLUME},atrim=duration=${VIDEO_DURATION},asetpts=PTS-STARTPTS,
-afade=t=in:st=0:d=${FADE_IN},afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}[a]
+afade=t=in:st=0:d=${FADE_IN},
+afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}[a]
 " \
 -map "[v]" -map "[a]" \
 -t ${VIDEO_DURATION} \
--pix_fmt yuv420p -movflags +faststart "${outPath}"
+-pix_fmt yuv420p -movflags +faststart "${outputPath}"
 `;
 
       exec(ffmpegCmd, { timeout: 60000 }, (err2) => {
-        if (err2) return res.status(500).json({ error: "ffmpeg failed" });
+        try { fs.unlinkSync(inputPath); } catch {}
 
-        // Move to public
-        fs.copyFileSync(outPath, publicPath);
-
-        const videoUrlPublic = `${req.protocol}://${req.get("host")}/videos/${id}.mp4`;
-
-        // CLEANUP TMP
-        fs.unlinkSync(videoPath);
-        fs.unlinkSync(outPath);
-
-        // 🔥 OPTION A: JSON (TikTok / IG / FB / YT)
-        if (!returnBinary) {
-          return res.json({
-            video_url: videoUrlPublic,
-            duration: VIDEO_DURATION,
-            format: "mp4"
-          });
+        if (err2) {
+          console.error("ffmpeg error:", err2);
+          return res.status(500).json({ error: "ffmpeg failed" });
         }
 
-        // 🔥 OPTION B: Binary (optional)
-        res.sendFile(publicPath);
+        return res.json({
+          video_url: `${PUBLIC_BASE_URL}/videos/${outputFile}`,
+          duration: VIDEO_DURATION,
+          format: "mp4",
+          binary_available: true
+        });
       });
     });
 
   } catch (e) {
+    console.error(e);
     res.status(500).json({ error: e.message });
   }
 });
 
+/**
+ * SERVE VIDEO BINARY
+ */
+app.get("/videos/:file", (req, res) => {
+  const filePath = path.join(OUTPUT_DIR, req.params.file);
+  if (!fs.existsSync(filePath)) {
+    return res.status(404).send("Not found");
+  }
+  res.sendFile(filePath);
+});
+
 app.listen(process.env.PORT || 8080, () => {
-  console.log("🎬 Video Looper + Public URL Engine running");
+  console.log("🎬 Video Looper + URL + Binary Engine running");
 });
