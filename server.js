@@ -1,3 +1,12 @@
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Serve static files from root
+app.use(express.static(__dirname));
+
 import express from "express";
 import { exec } from "child_process";
 import fs from "fs";
