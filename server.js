@@ -26,13 +26,38 @@ const PUBLIC_BASE_URL =
   "https://video-minimal-production.up.railway.app";
 
 const OUTPUT_DIR = "/tmp/videos";
-if (!fs.existsSync(OUTPUT_DIR)) {
-  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
-}
+if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-/* -------------------- Helpers -------------------- */
 function pickRandom(arr) {
   return arr[Math.floor(Math.random() * arr.length)];
+}
+
+function pickMusicOrFail(res) {
+  const tracks = fs.readdirSync(MUSIC_DIR).filter((f) => f.endsWith(".mp3"));
+  if (!tracks.length) {
+    res.status(500).json({ error: "no music found in ./music" });
+    return null;
+  }
+  return path.join(MUSIC_DIR, pickRandom(tracks));
+}
+
+function inferImageExt(url) {
+  // quick & dirty: jpg/png/webp fallback
+  const u = (url || "").toLowerCase();
+  if (u.includes(".png")) return "png";
+  if (u.includes(".webp")) return "webp";
+  if (u.includes(".jpeg")) return "jpg";
+  if (u.includes(".jpg")) return "jpg";
+  return "jpg";
+}
+
+function runCmd(cmd, opts = {}) {
+  return new Promise((resolve, reject) => {
+    exec(cmd, opts, (err, stdout, stderr) => {
+      if (err) return reject({ err, stdout, stderr });
+      resolve({ stdout, stderr });
+    });
+  });
 }
 
 /* =========================================================
@@ -41,32 +66,32 @@ function pickRandom(arr) {
 app.post("/loop", async (req, res) => {
   try {
     const { videoUrl } = req.body;
-    if (!videoUrl) {
-      return res.status(400).json({ error: "videoUrl missing" });
-    }
+    if (!videoUrl) return res.status(400).json({ error: "videoUrl missing" });
 
     const id = crypto.randomUUID();
     const inputPath = `/tmp/${id}_in.mp4`;
     const outputFile = `${id}.mp4`;
     const outputPath = path.join(OUTPUT_DIR, outputFile);
 
-    exec(`curl -L "${videoUrl}" -o "${inputPath}"`, (err) => {
-      if (err) return res.status(500).json({ error: "video download failed" });
+    // download with timeout
+    await runCmd(`curl -L --max-time 40 "${videoUrl}" -o "${inputPath}"`, {
+      timeout: 45000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
 
-      const tracks = fs.readdirSync(MUSIC_DIR).filter(f => f.endsWith(".mp3"));
-      if (!tracks.length) return res.status(500).json({ error: "no music" });
+    const musicPath = pickMusicOrFail(res);
+    if (!musicPath) return;
 
-      const musicPath = path.join(MUSIC_DIR, pickRandom(tracks));
-      const audioOffset = Math.floor(Math.random() * 8);
-      const fadeOutStart = VIDEO_DURATION - FADE_OUT;
+    const audioOffset = Math.floor(Math.random() * 8);
+    const fadeOutStart = Math.max(0, VIDEO_DURATION - FADE_OUT);
 
-      const cmd = `
-ffmpeg -y \
+    const ffmpegCmd = `
+ffmpeg -y -hide_banner -loglevel error \
 -stream_loop -1 -i "${inputPath}" \
 -ss ${audioOffset} -i "${musicPath}" \
 -filter_complex "
 [0:v]trim=duration=${VIDEO_DURATION},setpts=PTS-STARTPTS[v];
-[1:a]volume=${MUSIC_VOLUME},atrim=duration=${VIDEO_DURATION},
+[1:a]volume=${MUSIC_VOLUME},atrim=duration=${VIDEO_DURATION},asetpts=PTS-STARTPTS,
 afade=t=in:st=0:d=${FADE_IN},
 afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}[a]
 " \
@@ -75,19 +100,26 @@ afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}[a]
 -pix_fmt yuv420p -movflags +faststart "${outputPath}"
 `;
 
-      exec(cmd, () => {
-        const size = fs.statSync(outputPath).size;
-        res.json({
-          video_url: `${PUBLIC_BASE_URL}/videos/${outputFile}`,
-          duration: VIDEO_DURATION,
-          format: "mp4",
-          binary_available: true,
-          file_size: size
-        });
-      });
+    await runCmd(ffmpegCmd, { timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
+
+    // cleanup
+    try { fs.unlinkSync(inputPath); } catch {}
+
+    const size = fs.statSync(outputPath).size;
+
+    return res.json({
+      video_url: `${PUBLIC_BASE_URL}/videos/${outputFile}`,
+      duration: VIDEO_DURATION,
+      format: "mp4",
+      binary_available: true,
+      file_size: size,
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    // show real error
+    return res.status(500).json({
+      error: "video loop failed",
+      details: e?.stderr || e?.err?.message || e?.message || String(e),
+    });
   }
 });
 
@@ -97,53 +129,61 @@ afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}[a]
 app.post("/image-loop", async (req, res) => {
   try {
     const { imageUrl } = req.body;
-    if (!imageUrl) {
-      return res.status(400).json({ error: "imageUrl missing" });
-    }
+    if (!imageUrl) return res.status(400).json({ error: "imageUrl missing" });
 
     const id = crypto.randomUUID();
-    const imagePath = `/tmp/${id}.img`;
+    const ext = inferImageExt(imageUrl);
+    const imagePath = `/tmp/${id}.${ext}`;
     const outputFile = `${id}.mp4`;
     const outputPath = path.join(OUTPUT_DIR, outputFile);
 
-    exec(`curl -L "${imageUrl}" -o "${imagePath}"`, (err) => {
-      if (err) return res.status(500).json({ error: "image download failed" });
+    await runCmd(`curl -L --max-time 40 "${imageUrl}" -o "${imagePath}"`, {
+      timeout: 45000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
 
-      const tracks = fs.readdirSync(MUSIC_DIR).filter(f => f.endsWith(".mp3"));
-      if (!tracks.length) return res.status(500).json({ error: "no music" });
+    const musicPath = pickMusicOrFail(res);
+    if (!musicPath) return;
 
-      const musicPath = path.join(MUSIC_DIR, pickRandom(tracks));
-      const audioOffset = Math.floor(Math.random() * 8);
-      const fadeOutStart = VIDEO_DURATION - FADE_OUT;
+    const audioOffset = Math.floor(Math.random() * 8);
+    const fadeOutStart = Math.max(0, VIDEO_DURATION - FADE_OUT);
 
-      const cmd = `
-ffmpeg -y \
+    // wichtig: -loop 1 + sicherer scale/pad für 9:16 ohne Verzerren
+    const ffmpegCmd = `
+ffmpeg -y -hide_banner -loglevel error \
 -loop 1 -i "${imagePath}" \
 -ss ${audioOffset} -i "${musicPath}" \
 -filter_complex "
-[0:v]scale=1080:1920,format=yuv420p[v];
-[1:a]volume=${MUSIC_VOLUME},atrim=duration=${VIDEO_DURATION},
+[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,
+pad=1080:1920:(ow-iw)/2:(oh-ih)/2,
+format=yuv420p,setsar=1[v];
+[1:a]volume=${MUSIC_VOLUME},atrim=duration=${VIDEO_DURATION},asetpts=PTS-STARTPTS,
 afade=t=in:st=0:d=${FADE_IN},
 afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}[a]
 " \
 -map "[v]" -map "[a]" \
--t ${VIDEO_DURATION} \
+-r 30 -t ${VIDEO_DURATION} \
 -movflags +faststart "${outputPath}"
 `;
 
-      exec(cmd, () => {
-        const size = fs.statSync(outputPath).size;
-        res.json({
-          video_url: `${PUBLIC_BASE_URL}/videos/${outputFile}`,
-          duration: VIDEO_DURATION,
-          format: "mp4",
-          binary_available: true,
-          file_size: size
-        });
-      });
+    await runCmd(ffmpegCmd, { timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
+
+    try { fs.unlinkSync(imagePath); } catch {}
+
+    const size = fs.statSync(outputPath).size;
+
+    return res.json({
+      video_url: `${PUBLIC_BASE_URL}/videos/${outputFile}`,
+      duration: VIDEO_DURATION,
+      format: "mp4",
+      binary_available: true,
+      file_size: size,
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return res.status(500).json({
+      error: "image loop failed",
+      details: e?.stderr || e?.err?.message || e?.message || String(e),
+    });
   }
 });
 
