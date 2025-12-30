@@ -96,11 +96,16 @@ afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}[a]
           return res.status(500).json({ error: "ffmpeg failed" });
         }
 
+        // 🔥 NEW: file size in bytes (Facebook braucht das)
+        const stats = fs.statSync(outputPath);
+        const fileSize = stats.size;
+
         return res.json({
           video_url: `${PUBLIC_BASE_URL}/videos/${outputFile}`,
           duration: VIDEO_DURATION,
           format: "mp4",
           binary_available: true,
+          file_size: fileSize
         });
       });
     });
