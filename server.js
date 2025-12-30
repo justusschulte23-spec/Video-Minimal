@@ -5,11 +5,11 @@ import crypto from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 
-/* -------------------- ESM dirname fix -------------------- */
+/* -------------------- dirname -------------------- */
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-/* -------------------- App -------------------- */
+/* -------------------- APP -------------------- */
 const app = express();
 app.use(express.json());
 app.use(express.static(__dirname));
@@ -28,173 +28,135 @@ const PUBLIC_BASE_URL =
 const OUTPUT_DIR = "/tmp/videos";
 if (!fs.existsSync(OUTPUT_DIR)) fs.mkdirSync(OUTPUT_DIR, { recursive: true });
 
-function pickRandom(arr) {
-  return arr[Math.floor(Math.random() * arr.length)];
-}
+/* -------------------- HELPERS -------------------- */
+const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
-function pickMusicOrFail(res) {
-  const tracks = fs.readdirSync(MUSIC_DIR).filter((f) => f.endsWith(".mp3"));
+const pickMusicOrFail = (res) => {
+  const tracks = fs.readdirSync(MUSIC_DIR).filter(f => f.endsWith(".mp3"));
   if (!tracks.length) {
-    res.status(500).json({ error: "no music found in ./music" });
+    res.status(500).json({ error: "no music found" });
     return null;
   }
   return path.join(MUSIC_DIR, pickRandom(tracks));
-}
+};
 
-function inferImageExt(url) {
-  // quick & dirty: jpg/png/webp fallback
-  const u = (url || "").toLowerCase();
-  if (u.includes(".png")) return "png";
-  if (u.includes(".webp")) return "webp";
-  if (u.includes(".jpeg")) return "jpg";
-  if (u.includes(".jpg")) return "jpg";
-  return "jpg";
-}
+const run = (cmd) =>
+  new Promise((resolve, reject) =>
+    exec(cmd, { timeout: 120000 }, (err, out, errOut) =>
+      err ? reject(errOut || err) : resolve()
+    )
+  );
 
-function runCmd(cmd, opts = {}) {
-  return new Promise((resolve, reject) => {
-    exec(cmd, opts, (err, stdout, stderr) => {
-      if (err) return reject({ err, stdout, stderr });
-      resolve({ stdout, stderr });
-    });
-  });
-}
-
-/* =========================================================
-   =============== VIDEO LOOP (BESTEHEND) ==================
-   ========================================================= */
+/* =================================================
+   ================= VIDEO LOOP ====================
+   ================================================= */
 app.post("/loop", async (req, res) => {
   try {
     const { videoUrl } = req.body;
     if (!videoUrl) return res.status(400).json({ error: "videoUrl missing" });
 
     const id = crypto.randomUUID();
-    const inputPath = `/tmp/${id}_in.mp4`;
-    const outputFile = `${id}.mp4`;
-    const outputPath = path.join(OUTPUT_DIR, outputFile);
+    const inPath = `/tmp/${id}_in.mp4`;
+    const outFile = `${id}.mp4`;
+    const outPath = path.join(OUTPUT_DIR, outFile);
 
-    // download with timeout
-    await runCmd(`curl -L --max-time 40 "${videoUrl}" -o "${inputPath}"`, {
-      timeout: 45000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    await run(`curl -L "${videoUrl}" -o "${inPath}"`);
 
-    const musicPath = pickMusicOrFail(res);
-    if (!musicPath) return;
+    const music = pickMusicOrFail(res);
+    if (!music) return;
 
-    const audioOffset = Math.floor(Math.random() * 8);
-    const fadeOutStart = Math.max(0, VIDEO_DURATION - FADE_OUT);
+    const fadeOutStart = VIDEO_DURATION - FADE_OUT;
 
-    const ffmpegCmd = `
-ffmpeg -y -hide_banner -loglevel error \
--stream_loop -1 -i "${inputPath}" \
--ss ${audioOffset} -i "${musicPath}" \
+    await run(`
+ffmpeg -y \
+-stream_loop -1 -i "${inPath}" \
+-i "${music}" \
 -filter_complex "
 [0:v]trim=duration=${VIDEO_DURATION},setpts=PTS-STARTPTS[v];
-[1:a]volume=${MUSIC_VOLUME},atrim=duration=${VIDEO_DURATION},asetpts=PTS-STARTPTS,
+[1:a]volume=${MUSIC_VOLUME},atrim=duration=${VIDEO_DURATION},
 afade=t=in:st=0:d=${FADE_IN},
 afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}[a]
 " \
 -map "[v]" -map "[a]" \
 -t ${VIDEO_DURATION} \
--pix_fmt yuv420p -movflags +faststart "${outputPath}"
-`;
+-pix_fmt yuv420p -movflags +faststart "${outPath}"
+`);
 
-    await runCmd(ffmpegCmd, { timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
+    const size = fs.statSync(outPath).size;
 
-    // cleanup
-    try { fs.unlinkSync(inputPath); } catch {}
-
-    const size = fs.statSync(outputPath).size;
-
-    return res.json({
-      video_url: `${PUBLIC_BASE_URL}/videos/${outputFile}`,
+    res.json({
+      video_url: `${PUBLIC_BASE_URL}/videos/${outFile}`,
       duration: VIDEO_DURATION,
       format: "mp4",
       binary_available: true,
-      file_size: size,
+      file_size: size
     });
+
   } catch (e) {
-    // show real error
-    return res.status(500).json({
-      error: "video loop failed",
-      details: e?.stderr || e?.err?.message || e?.message || String(e),
-    });
+    res.status(500).json({ error: "video loop failed", details: String(e) });
   }
 });
 
-/* =========================================================
-   =============== IMAGE LOOP (NEU) =========================
-   ========================================================= */
+/* =================================================
+   ================= IMAGE LOOP ====================
+   ================================================= */
 app.post("/image-loop", async (req, res) => {
   try {
     const { imageUrl } = req.body;
     if (!imageUrl) return res.status(400).json({ error: "imageUrl missing" });
 
     const id = crypto.randomUUID();
-    const ext = inferImageExt(imageUrl);
-    const imagePath = `/tmp/${id}.${ext}`;
-    const outputFile = `${id}.mp4`;
-    const outputPath = path.join(OUTPUT_DIR, outputFile);
+    const imgPath = `/tmp/${id}.jpg`;
+    const outFile = `${id}.mp4`;
+    const outPath = path.join(OUTPUT_DIR, outFile);
 
-    await runCmd(`curl -L --max-time 40 "${imageUrl}" -o "${imagePath}"`, {
-      timeout: 45000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    await run(`curl -L "${imageUrl}" -o "${imgPath}"`);
 
-    const musicPath = pickMusicOrFail(res);
-    if (!musicPath) return;
+    const music = pickMusicOrFail(res);
+    if (!music) return;
 
-    const audioOffset = Math.floor(Math.random() * 8);
-    const fadeOutStart = Math.max(0, VIDEO_DURATION - FADE_OUT);
+    const fadeOutStart = VIDEO_DURATION - FADE_OUT;
 
-    // wichtig: -loop 1 + sicherer scale/pad für 9:16 ohne Verzerren
-    const ffmpegCmd = `
-ffmpeg -y -hide_banner -loglevel error \
--loop 1 -i "${imagePath}" \
--ss ${audioOffset} -i "${musicPath}" \
+    await run(`
+ffmpeg -y \
+-loop 1 -framerate 30 -i "${imgPath}" \
+-i "${music}" \
 -filter_complex "
 [0:v]scale=1080:1920:force_original_aspect_ratio=decrease,
 pad=1080:1920:(ow-iw)/2:(oh-ih)/2,
 format=yuv420p,setsar=1[v];
-[1:a]volume=${MUSIC_VOLUME},atrim=duration=${VIDEO_DURATION},asetpts=PTS-STARTPTS,
+[1:a]volume=${MUSIC_VOLUME},atrim=duration=${VIDEO_DURATION},
 afade=t=in:st=0:d=${FADE_IN},
 afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}[a]
 " \
 -map "[v]" -map "[a]" \
 -r 30 -t ${VIDEO_DURATION} \
--movflags +faststart "${outputPath}"
-`;
+-movflags +faststart "${outPath}"
+`);
 
-    await runCmd(ffmpegCmd, { timeout: 120000, maxBuffer: 10 * 1024 * 1024 });
+    const size = fs.statSync(outPath).size;
 
-    try { fs.unlinkSync(imagePath); } catch {}
-
-    const size = fs.statSync(outputPath).size;
-
-    return res.json({
-      video_url: `${PUBLIC_BASE_URL}/videos/${outputFile}`,
+    res.json({
+      video_url: `${PUBLIC_BASE_URL}/videos/${outFile}`,
       duration: VIDEO_DURATION,
       format: "mp4",
       binary_available: true,
-      file_size: size,
+      file_size: size
     });
+
   } catch (e) {
-    return res.status(500).json({
-      error: "image loop failed",
-      details: e?.stderr || e?.err?.message || e?.message || String(e),
-    });
+    res.status(500).json({ error: "image loop failed", details: String(e) });
   }
 });
 
-/* -------------------- SERVE VIDEOS -------------------- */
+/* -------------------- SERVE -------------------- */
 app.get("/videos/:file", (req, res) => {
-  const filePath = path.join(OUTPUT_DIR, req.params.file);
-  if (!fs.existsSync(filePath)) return res.status(404).send("Not found");
-  res.sendFile(filePath);
+  const p = path.join(OUTPUT_DIR, req.params.file);
+  if (!fs.existsSync(p)) return res.status(404).send("Not found");
+  res.sendFile(p);
 });
 
 /* -------------------- START -------------------- */
-app.listen(process.env.PORT || 8080, () => {
-  console.log("🎬 Video + Image Looper running");
-});
+app.listen(process.env.PORT || 8080, () =>
+  console.log("🎬 Motion + Static Image Looper ready")
+);
