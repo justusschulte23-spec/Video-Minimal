@@ -20,6 +20,7 @@ const VIDEO_DURATION = 15;
 const FADE_IN = 0.3;
 const FADE_OUT = 0.3;
 const MUSIC_VOLUME = 0.25;
+const FPS = 30;
 
 const PUBLIC_BASE_URL =
   process.env.PUBLIC_BASE_URL ||
@@ -89,7 +90,7 @@ afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}[a]
 });
 
 /* =========================================================
-   ===================== IMAGE LOOP ========================
+   =============== IMAGE → VIDEO (PLATFORM SAFE) ===========
    ========================================================= */
 app.post("/image-loop", async (req, res) => {
   try {
@@ -100,21 +101,33 @@ app.post("/image-loop", async (req, res) => {
     const output = path.join(OUTPUT_DIR, `${id}.mp4`);
     const music = pickMusic();
     const fadeOutStart = VIDEO_DURATION - FADE_OUT;
+    const totalFrames = VIDEO_DURATION * FPS;
 
-    // 🔥 WICHTIG: image2pipe + curl stream
     await run(`
 curl -L "${imageUrl}" | \
-ffmpeg -y -f image2pipe -i pipe:0 -i "${music}" \
+ffmpeg -y -loop 1 -i pipe:0 -i "${music}" \
 -filter_complex "
-[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,
-pad=1080:1920:(ow-iw)/2:(oh-ih)/2,
-format=yuv420p,setsar=1[v];
-[1:a]volume=${MUSIC_VOLUME},atrim=duration=${VIDEO_DURATION},
+[0:v]
+scale=1200:2133,
+zoompan=
+z='min(zoom+0.0008,1.06)':
+x='iw/2-(iw/zoom/2)+sin(on/30)*2':
+y='ih/2-(ih/zoom/2)+cos(on/40)*2':
+d=${totalFrames}:s=1080x1920:fps=${FPS},
+format=yuv420p
+[v];
+[1:a]
+volume=${MUSIC_VOLUME},
+atrim=duration=${VIDEO_DURATION},
 afade=t=in:st=0:d=${FADE_IN},
-afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}[a]
+afade=t=out:st=${fadeOutStart}:d=${FADE_OUT}
+[a]
 " \
 -map "[v]" -map "[a]" \
--r 30 -t ${VIDEO_DURATION} -movflags +faststart "${output}"
+-t ${VIDEO_DURATION} \
+-pix_fmt yuv420p \
+-movflags +faststart \
+"${output}"
 `);
 
     const size = fs.statSync(output).size;
@@ -138,5 +151,5 @@ app.get("/videos/:file", (req, res) => {
 });
 
 app.listen(process.env.PORT || 8080, () => {
-  console.log("🎬 Video + Image Looper running");
+  console.log("🎬 Video + Image Looper running (PLATFORM SAFE)");
 });
